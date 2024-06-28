@@ -4,6 +4,6 @@ After creating a docker image, you can run the docker image, using the following
 
 `docker run -v <LOCAL CONFIG JSON PATH>:/usr/app/config.json -v <LOCAL OUTPUT PATH>:/usr/app/outputs -d <DOCKER IMAGE TAG>` 
 
-Input and output example can be found at this repository.
-Input -> config.json
+Input and output example can be found at this repository. <br>
+Input -> config.json <br>
 Output -> outputs/*
