@@ -1,0 +1,16 @@
+{
+    "name": "sftp-file-shipper",
+    "version": "1.0.0",
+    "description": "",
+    "main": "src/app.js",
+    "scripts": {
+        "start": "node src/app.js config.json ./outputs",
+        "docker": "node /usr/app/src/app.js /usr/app/config.json /usr/app/outputs"
+    },
+    "author": "",
+    "license": "MIT",
+    "type": "module",
+    "dependencies": {
+        "js-yaml": "^4.1.0"
+    }
+}

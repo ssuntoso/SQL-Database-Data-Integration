@@ -1,4 +1,4 @@
-# SQL-Database-Data-Integration
+# SFTP-File-Shipper
  
 To run the docker image, run the following command
 

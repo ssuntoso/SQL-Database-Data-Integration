@@ -1,0 +1,184 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  generateName: read-psql-template
+  name: read-psql-template
+spec:
+  entrypoint: get-data-changes
+  templates:
+    - name: get-data-changes
+      dag:
+        tasks:
+          - name: run-datax
+            template: run-datax
+          - name: convert-output-to-json
+            dependencies:
+              - run-datax
+            template: convert-output-to-json
+            arguments:
+              artifacts:
+                - name: result
+                  from: '{{tasks.run-datax.outputs.artifacts.datax-output}}'
+                - name: lastruntime
+                  from: '{{tasks.run-datax.outputs.artifacts.lastruntime}}'
+      outputs:
+        artifacts:
+          - name: output
+            from: '{{tasks.convert-output-to-json.outputs.artifacts.output}}'
+          - name: lastruntime
+            from: '{{tasks.run-datax.outputs.artifacts.lastruntime}}'
+        parameters:
+          - name: meta-row
+            valueFrom:
+              parameter: '{{tasks.run-datax.outputs.parameters.meta-row}}'
+          - name: meta-time
+            valueFrom:
+              parameter: '{{tasks.run-datax.outputs.parameters.meta-time}}'
+          - name: meta-files
+            valueFrom:
+              parameter: '{{tasks.convert-output-to-json.outputs.parameters.meta-files}}'
+    - name: run-datax
+      inputs:
+        artifacts:
+          - name: config-input
+            path: /opt/datax/src/config/config.json
+            s3:
+              key: sean/config.json
+          - name: lastruntime
+            path: /tmp/lastruntime.txt
+            s3:
+              key: sean/lastruntime.txt
+          - name: lastsuccessruntime
+            path: /tmp/lastsuccessruntime.txt
+            s3:
+              key: sean/lastsuccessruntime.txt
+      script:
+        image: ssuntoso/datax:mysql-txt
+        env:
+          - name: PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: >-
+                  'https://your-key-vault-name.vault.azure.net/secrets/your-db-pw-name/your-db-pw-version'
+                key: password
+        resources:
+          requests:
+            ephemeral-storage: 2Gi
+          limits:
+            ephemeral-storage: 4Gi
+        command:
+          - sh
+        source: >
+          lastruntime=$(cat /tmp/lastruntime.txt)
+
+          lastsuccessruntime=$(cat /tmp/lastsuccessruntime.txt)
+
+
+          lastrun=$(date -d "${lastruntime:0:10} ${lastruntime:11:-3}" +%s)
+
+          lastsuccess=$(date -d "${lastsuccessruntime:0:10}
+          ${lastsuccessruntime:11:-3}" +%s)
+
+          currenttime=$(date -u +"%FT%T+00")
+
+
+          mkdir /opt/datax/src/result/
+
+
+          # Check if there are running workflow and run datax if lestruntime >
+          lastsuccessruntime
+
+          if [ $lastrun -gt $lastsuccess ] 
+
+          then
+            echo "There are running workflow"
+            echo "noData" > /opt/datax/src/result/output.csv
+            echo 0 > /tmp/meta-row.txt
+          else 
+            reader="mysqlreader"
+            where="timestamp >= '$lastruntime' AND timestamp < '$currenttime'"
+            query="\"SELECT * FROM db_view WHERE $where\""
+            timezone="GMT+8"
+            jdbcUrl="jdbc:mysql://example-database-host:5432/example-database"
+            username="readonlyuser"
+
+            python3 /opt/datax/bin/datax.py -p" -Duser.timezone=$timezone -DreaderName=$reader -Dusername=username -Dpassword=$PASSWORD -DquerySql=$query -DjdbcUrl=$jdbcUrl" /opt/datax/src/config/config.json
+
+            cd /opt/datax/src/result/
+            expr $(wc -l < $(ls)) - 1 > /tmp/meta-row.txt
+          fi
+
+
+          # check if there are new data
+
+          if [ $(cat /tmp/meta-row.txt) -eq 0 ]; then
+            echo $lastruntime > /tmp/currenttime.txt
+          else 
+            echo $currenttime > /tmp/currenttime.txt
+          fi
+        securityContext:
+          privileged: true
+          runAsUser: 0
+      outputs:
+        artifacts:
+          - name: datax-output
+            path: /opt/datax/src/result
+          - name: lastruntime
+            path: /tmp/currenttime.txt
+        parameters:
+          - name: meta-time
+            valueFrom:
+              path: /tmp/currenttime.txt
+          - name: meta-lastsuccess
+            valueFrom:
+              path: /tmp/lastsuccessruntime.txt
+          - name: meta-row
+            valueFrom:
+              path: /tmp/meta-row.txt
+    - name: convert-output-to-json
+      inputs:
+        artifacts:
+          - name: result
+            path: /tmp/result/
+          - name: lastruntime
+            path: /tmp/lastruntime.txt
+        parameters:
+          - name: batch
+            value: 'true'
+      script:
+        image: ssuntoso/jq-csvkit
+        command:
+          - sh
+        source: >
+          csvjson /tmp/result/* > /tmp/result/output.json
+
+
+          mkdir /tmp/result/json/
+
+
+          if {{inputs.parameters.batch}}; then 
+            cp /tmp/result/output.json /tmp/result/json/output.json
+          else
+            for f in $(jq -r 'keys[]' /tmp/result/output.json); do
+              jq ".[$f]" < /tmp/result/output.json > /tmp/result/json/row_$f.json
+            done
+          fi
+
+
+          files=$(ls /tmp/result/json/ | while read line; do printf "\"%s\","
+          "$line"; done )
+
+          echo "[${files%?}]" > /tmp/meta-files.txt
+      outputs:
+        artifacts:
+          - name: output
+            path: /tmp/result/json/
+          - name: lastruntime
+            path: /tmp/lastruntime.txt
+            s3:
+              key: sean/lastruntime.txt
+        parameters:
+          - name: meta-files
+            valueFrom:
+              path: /tmp/meta-files.txt
+  activeDeadlineSeconds: '60'

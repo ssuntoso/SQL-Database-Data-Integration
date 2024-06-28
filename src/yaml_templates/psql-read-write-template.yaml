@@ -1,0 +1,128 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  generateName: psql-read-write-template
+  name: psql-read-write-template
+spec:
+  entrypoint: data-upload
+  templates:
+    - name: data-upload
+      dag:
+        tasks:
+        - name: get-artifact
+          templateRef:
+            name: read-psql-template
+            template: get-data-changes
+        - name: call-api
+          dependencies: [get-artifact]
+          template: call-api
+          when: "{{tasks.get-artifact.outputs.parameters.meta-row}} != 0"
+          arguments:
+            artifacts:
+            - name: files
+              from: "{{tasks.get-artifact.outputs.artifacts.output}}"
+            parameters:
+            - name: file
+              value: "{{item}}"
+            withParam: "{{tasks.get-artifact.outputs.parameters.meta-files}}"
+        - name: upload-to-s3
+          dependencies: [call-api]
+          template: upload-to-s3
+          when: "{{tasks.get-artifact.outputs.parameters.meta-row}} != 0"
+          arguments:
+            artifacts:
+            - name: lastruntime
+              from: "{{tasks.get-artifact.outputs.artifacts.lastruntime}}"
+
+    - name: call-api
+      inputs:
+        artifacts:
+          - name: files
+        parameters:
+          - name: file
+      dag:
+        tasks:
+        - name: calling-api
+          template: calling-api
+          arguments: 
+            artifacts: 
+              - name: files
+                from: "{{inputs.artifacts.files}}"
+            parameters:
+              - name: file
+                value: "{{inputs.parameters.file}}"
+        - name: approval  
+          dependencies: [calling-api]
+          template: approval
+          arguments:
+            parameters:
+              - name: node-name
+                value: "{{tasks.calling-api.outputs.parameters.node-name}}"
+
+    - name: calling-api
+      retryStrategy:
+        limit: "2"
+      inputs:
+        artifacts:
+          - name: files
+            path: /tmp/json/
+        parameters:
+          - name: file
+      script:
+        image: curlimages/curl:latest
+        command:
+          - sh
+        source: |
+          cd /tmp/json
+          
+          curl -s -X POST https://jsonplaceholder.typicode.com/posts \
+            -H 'Content-Type: multipart/form-data' \
+            -F "file=@{{inputs.parameters.file}}" \
+            -w '%{http_code}' > /tmp/status-code.txt \
+            -o /tmp/response.txt \
+          
+          statusCode=$(cat /tmp/status-code.txt)
+          if [ $statusCode -gte 400 ]; then
+            echo "API call failed with status code $statusCode"
+            exit 1
+          fi
+        
+          cat /tmp/response.txt
+
+          echo "{{node.name}}"
+          echo "{{workflow.name}}"
+          echo "{{node.name}}" > /tmp/node-name.txt
+        securityContext:
+          privileged: true 
+          runAsUser: 0
+      outputs:
+        parameters:
+          - name: node-name
+            valueFrom:
+              path: /tmp/node-name.txt
+          - name: response-status
+            valueFrom:
+              path: /tmp/status-code.txt
+    
+    - name: approval
+      inputs:
+        parameters:
+          - name: node-name
+      suspend: {}
+
+    - name: upload-to-s3
+      inputs:
+        artifacts:
+        - name: lastruntime
+          path: /tmp/lastruntime/
+      container:
+        image: alpine
+        command: [sh, -c]
+        args: ["echo \"done\""]
+      outputs:
+        artifacts:
+        - name: lastruntime
+          path: /tmp/lastruntime/
+          s3:
+            key: 'sean/lastsuccessruntime.txt'
+

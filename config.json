@@ -1,0 +1,52 @@
+{
+    "Workflow": {
+        "Name": "Database Processing Workflow",
+        "Trigger": {
+            "JDBCInput": {
+                "Type": "JDBC",
+                "Config": {
+                    "Database": "mysql", 
+                    "Hostname": "example-database-host",
+                    "Port": 5432,
+                    "DatabaseName": "example-database",
+                    "Username": "readonlyuser",
+                    "Password": "https://your-key-vault-name.vault.azure.net/secrets/your-db-pw-name/your-db-pw-version",
+                    "Query": "SELECT * FROM db_view",
+                    "Timezone": "GMT+8",
+                    "TimeField": "updated_at",
+                    "Schedule": "0 0 * * *",
+                    "Timeout": "60",
+                    "ProcessInOrder": true
+                }
+            },
+            "States": {
+                "DataUpload": {
+                    "Type": "API",
+                    "Dependent": [
+                        "JDBCInput"
+                    ],
+                    "Config": {
+                        "ApiEndpoint": "https://api-gateway.example.com/data-upload",
+                        "Method": "POST",
+                        "ApiKey": "https://your-key-vault-name.vault.azure.net/secrets/your-api-key-name/your-key-version",
+                        "headers": [
+                            {
+                                "name": "ContentType",
+                                "value": "application/json"
+                            }
+                        ],
+                        "retryStrategy": {
+                            "limit": 3,
+                            "retryPolicy": "OnFailure",
+                            "backoff": {
+                                "duration": 1,
+                                "factor": 2,
+                                "maxDuration": "1m"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

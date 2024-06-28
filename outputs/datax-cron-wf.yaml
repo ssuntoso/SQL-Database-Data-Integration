@@ -1,0 +1,45 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: read-write-wf
+spec:
+  schedule: 0 0 * * *
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 0
+  workflowSpec:
+    entrypoint: read-write
+    onExit: exit-handler
+    artifactRepositoryRef:
+      configMap: gap-artifact-repository
+      key: gap-azure-blob-artifact-repository
+    templates:
+      - name: read-write
+        steps:
+          - - name: run-template
+              templateRef:
+                name: psql-read-write-template
+                template: data-upload
+      - name: exit-handler
+        steps:
+          - - name: error
+              template: error
+              when: '{{workflow.status}} != Succeeded'
+            - name: succeeded
+              template: succeeded
+              when: '{{workflow.status}} == Succeeded'
+      - name: error
+        container:
+          image: alpine:latest
+          command:
+            - sh
+            - '-c'
+          args:
+            - echo "ERROR"
+      - name: succeeded
+        container:
+          image: alpine:latest
+          command:
+            - sh
+            - '-c'
+          args:
+            - echo "Succeeded"
